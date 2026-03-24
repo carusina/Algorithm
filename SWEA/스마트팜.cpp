@@ -1,342 +1,251 @@
-constexpr int MAX_N = 1001;
-constexpr int MAX_CATEGORY = 3;
+#define MAX_N 1000
+#define MAX_CATEGORY 3
+#define MAX_CROPS 100000 // sow() 최대 호출 100,000번
+#define BUCKET_SIZE 32
 
-constexpr int MAX_BLOCKS = 32; // sqrt(1000) ~= 31.~~
-constexpr int BLOCK_SIZE = 32;
+#include <cstring>
+#include <algorithm>
 
-constexpr long long INF = 0x3f3f3f3f3f3f3f3f;
+// ====================
+// 구조체 선언
+// ====================
 
-struct CropCell {
-	bool activate;
+struct Crop {
+	int row, col;
 	int category;
 	int plantTime;
 	int wateredSize;
+	int prev, next;
 };
 
-struct BucketMeta {
-	int cropCount; // 버킷의 심어진 작물 수
-	int lazyWater; // 버킷에 급수된 물의 G 크기
-	long long worstGrowthState[3]; // 버킷에서 가장 덜 자란 작물 상태 캐싱
-	short activeRows[1024]; // 심어진 작물의 행 좌표 기록 (MAX_BLOCKS * MAX_BLOCKS)
-	short activeCols[1024]; // 심어진 작물의 열 좌표 기록 (MAX_BLOCKS * MAX_BLOCKS)
+struct Bucket {
+	int head;
+	int activeCropCount;
+	int wateredSize;
 };
 
-CropCell farm[MAX_N][MAX_N];
-BucketMeta buckets[MAX_BLOCKS][MAX_BLOCKS];
+// ====================
+// 전역 변수
+// ====================
 
 int farmSize;
 int growthTime[MAX_CATEGORY];
+bool isPlanted[MAX_N + 1][MAX_N + 1];
 
-// ============================
-// API Helper
-// ============================
-inline void PushDownLazyWater(int br, int bc) {
-	if (buckets[br][bc].lazyWater == 0)
-	{
-		return;
-	}
+Bucket farmBucket[BUCKET_SIZE][BUCKET_SIZE];
 
-	int addedWater = buckets[br][bc].lazyWater;
-	for (int i = 0; i < buckets[br][bc].cropCount; ++i)
-	{
-		int ar = buckets[br][bc].activeRows[i];
-		int ac = buckets[br][bc].activeCols[i];
-		farm[ar][ac].wateredSize += addedWater;
-	}
-	buckets[br][bc].lazyWater = 0;
+Crop cropPool[MAX_CROPS + 1];
+int allocatedCropCount;
 
-	// 버킷의 최악 상태 값도 동기화
-	for (int c = 0; c < MAX_CATEGORY; ++c)
-	{
-		if (buckets[br][bc].worstGrowthState[c] != INF)
-		{
-			buckets[br][bc].worstGrowthState[c] += (long long)growthTime[c] * addedWater;
-		}
-	}
-}
-
-inline void RecalculateBucketState(int br, int bc) {
-	for (int c = 0; c < MAX_CATEGORY; ++c)
-	{
-		buckets[br][bc].worstGrowthState[c] = INF;
-	}
-
-	for (int i = 0; i < buckets[br][bc].cropCount; ++i)
-	{
-		int ar = buckets[br][bc].activeRows[i];
-		int ac = buckets[br][bc].activeCols[i];
-		int category = farm[ar][ac].category;
-
-		// 상태 방정식: (물 * 성장시간) - 심은시간
-		long long currentState = (long long)growthTime[category] * farm[ar][ac].wateredSize - farm[ar][ac].plantTime;
-		if (currentState < buckets[br][bc].worstGrowthState[category])
-		{
-			buckets[br][bc].worstGrowthState[category] = currentState;
-		}
-	}
-}
-
-inline bool IsCropHaverstable(int r, int c, int mTime, int L) {
-	int category = farm[r][c].category;
-	
-	long long currentState = (long long)growthTime[category] * farm[r][c].wateredSize - farm[r][c].plantTime;
-	long long requiredThreshold = (long long)growthTime[category] * L - mTime;
-
-	return currentState >= requiredThreshold;
-}
-
-inline void RemoveCropSwapAndPop(int br, int bc, int index) {
-	int ar = buckets[br][bc].activeRows[index];
-	int ac = buckets[br][bc].activeCols[index];
-
-	farm[ar][ac].activate = false;
-
-	int lastIndex = buckets[br][bc].cropCount - 1;
-	buckets[br][bc].activeRows[index] = buckets[br][bc].activeRows[lastIndex];
-	buckets[br][bc].activeCols[index] = buckets[br][bc].activeCols[lastIndex];
-	buckets[br][bc].cropCount--;
-}
-
-// ============================
+// ====================
 // API 구현부
-// ============================
+// ====================
 
 void init(int N, int mGrowthTime[]) {
 	farmSize = N;
-	for (int i = 0; i < MAX_CATEGORY; ++i)
+	allocatedCropCount = 0;
+
+	for (int c = 0; c < MAX_CATEGORY; ++c)
 	{
-		growthTime[i] = mGrowthTime[i];
+		growthTime[c] = mGrowthTime[c];
 	}
 
-	int maxBr = (farmSize - 1) / BLOCK_SIZE;
-	int maxBc = (farmSize - 1) / BLOCK_SIZE;
+	int maxBr = (N - 1) / BUCKET_SIZE;
+	int maxBc = (N - 1) / BUCKET_SIZE;
+
+	std::memset(isPlanted, false, sizeof(isPlanted));
 
 	for (int br = 0; br <= maxBr; ++br)
 	{
 		for (int bc = 0; bc <= maxBc; ++bc)
 		{
-			// 심어졌던 곳만 찾아서 초기화
-			for (int i = 0; i < buckets[br][bc].cropCount; ++i)
-			{
-				int ar = buckets[br][bc].activeRows[i];
-				int ac = buckets[br][bc].activeCols[i];
-				farm[ar][ac].activate = false;
-			}
-
-			buckets[br][bc].cropCount = 0;
-			buckets[br][bc].lazyWater = 0;
-			for (int c = 0; c < MAX_CATEGORY; ++c)
-			{
-				buckets[br][bc].worstGrowthState[c] = INF;
-			}
+			farmBucket[br][bc].head = -1;
+			farmBucket[br][bc].activeCropCount = 0;
+			farmBucket[br][bc].wateredSize = 0;
 		}
 	}
 }
 
 int sow(int mTime, int mRow, int mCol, int mCategory) {
-	if (farm[mRow][mCol].activate)
+	if (isPlanted[mRow][mCol])
 	{
 		return 0;
 	}
 
-	int br = mRow / BLOCK_SIZE;
-	int bc = mCol / BLOCK_SIZE;
+	int br = mRow / BUCKET_SIZE;
+	int bc = mCol / BUCKET_SIZE;
+	Bucket& bucket = farmBucket[br][bc];
 
-	PushDownLazyWater(br, bc);
+	int cropIdx = allocatedCropCount++;
+	Crop& crop = cropPool[cropIdx];
 
-	farm[mRow][mCol].activate = true;
-	farm[mRow][mCol].category = mCategory;
-	farm[mRow][mCol].plantTime = mTime;
-	farm[mRow][mCol].wateredSize = 0;
+	crop.row = mRow;
+	crop.col = mCol;
+	crop.category = mCategory;
+	crop.plantTime = mTime;
+	crop.wateredSize = -bucket.wateredSize;
+	crop.prev = -1;
+	crop.next = bucket.head;
 
-	int currentCropCount = buckets[br][bc].cropCount;
-	buckets[br][bc].activeRows[currentCropCount] = mRow;
-	buckets[br][bc].activeCols[currentCropCount] = mCol;
-	buckets[br][bc].cropCount++;
+	if (bucket.head != -1)
+	{
+		cropPool[bucket.head].prev = cropIdx;
+	}
 
-	RecalculateBucketState(br, bc);
+	bucket.head = cropIdx;
+
+	bucket.activeCropCount++;
+	isPlanted[mRow][mCol] = true;
 
 	return 1;
 }
- 
+
 int water(int mTime, int G, int mRow, int mCol, int mHeight, int mWidth) {
-	int wateredCount = 0;
+	int wateredCropCount = 0;
 
-	int startBr = mRow / BLOCK_SIZE;
-	int startBC = mCol / BLOCK_SIZE;
-	int endBr = (mRow + mHeight - 1) / BLOCK_SIZE;
-	int endBc = (mCol + mWidth - 1) / BLOCK_SIZE;
+	int brStart = mRow / BUCKET_SIZE;
+	int bcStart = mCol / BUCKET_SIZE;
+	int brEnd = (mRow + mHeight - 1) / BUCKET_SIZE;
+	int bcEnd = (mCol + mWidth - 1) / BUCKET_SIZE;
 
-	for (int br = startBr; br <= endBr; ++br)
+	for (int br = brStart; br <= brEnd; ++br)
 	{
-		for(int bc = startBC; bc <= endBc; ++bc)
+		for (int bc = bcStart; bc <= bcEnd; ++bc)
 		{
-			if (buckets[br][bc].cropCount == 0)
+			Bucket& bucket = farmBucket[br][bc];
+			if (bucket.activeCropCount == 0)
 			{
 				continue;
 			}
 
-			int tileR1 = br * BLOCK_SIZE;
-			int tileR2 = tileR1 + BLOCK_SIZE - 1;
-			int tileC1 = bc * BLOCK_SIZE;
-			int tileC2 = tileC1 + BLOCK_SIZE - 1;
+			int rowStart = br * BUCKET_SIZE;
+			int colStart = bc * BUCKET_SIZE;
+			int rowEnd = std::min(rowStart + BUCKET_SIZE - 1, farmSize - 1);
+			int colEnd = std::min(colStart + BUCKET_SIZE - 1, farmSize - 1);
 
-			bool isFullyInside = (mRow <= tileR1 && tileR2 <= mRow + mHeight - 1) &&
-						         (mCol <= tileC1 && tileC2 <= mCol + mWidth - 1);
+			bool isFullyInside = (mRow <= rowStart && rowEnd <= mRow + mHeight - 1) &&
+				(mCol <= colStart && colEnd <= mCol + mWidth - 1);
 
 			if (isFullyInside)
 			{
-				buckets[br][bc].lazyWater += G;
-				wateredCount += buckets[br][bc].cropCount;
+				bucket.wateredSize += G;
+				wateredCropCount += bucket.activeCropCount;
 			}
 			else
 			{
-				PushDownLazyWater(br, bc);
-
-				for (int i = 0; i < buckets[br][bc].cropCount; ++i)
+				int currCropIdx = bucket.head;
+				while (currCropIdx != -1)
 				{
-					int ar = buckets[br][bc].activeRows[i];
-					int ac = buckets[br][bc].activeCols[i];
+					Crop& crop = cropPool[currCropIdx];
 
-					bool isInside = (mRow <= ar && ar <= mRow + mHeight - 1) &&
-									(mCol <= ac && ac <= mCol + mWidth - 1);
+					bool isInside = (mRow <= crop.row && crop.row <= mRow + mHeight - 1) &&
+						(mCol <= crop.col && crop.col <= mCol + mWidth - 1);
 
 					if (isInside)
 					{
-						farm[ar][ac].wateredSize += G;
-						wateredCount++;
+						crop.wateredSize += G;
+						wateredCropCount++;
 					}
-				}
 
-				RecalculateBucketState(br, bc);
+					currCropIdx = crop.next;
+				}
 			}
 		}
 	}
 
-	return wateredCount;
+	return wateredCropCount;
 }
 
 int harvest(int mTime, int L, int mRow, int mCol, int mHeight, int mWidth) {
-	int startBr = mRow / BLOCK_SIZE;
-	int startBC = mCol / BLOCK_SIZE;
-	int endBr = (mRow + mHeight - 1) / BLOCK_SIZE;
-	int endBc = (mCol + mWidth - 1) / BLOCK_SIZE;
+	int harvestedCropCount = 0;
 
-	for (int br = startBr; br <= endBr; ++br)
+	int brStart = mRow / BUCKET_SIZE;
+	int bcStart = mCol / BUCKET_SIZE;
+	int brEnd = (mRow + mHeight - 1) / BUCKET_SIZE;
+	int bcEnd = (mCol + mWidth - 1) / BUCKET_SIZE;
+
+	for (int br = brStart; br <= brEnd; ++br)
 	{
-		for (int bc = startBC; bc <= endBc; ++bc)
+		for (int bc = bcStart; bc <= bcEnd; ++bc)
 		{
-			if (buckets[br][bc].cropCount == 0)
+			Bucket& bucket = farmBucket[br][bc];
+			if (bucket.activeCropCount == 0)
 			{
 				continue;
 			}
 
-			int tileR1 = br * BLOCK_SIZE;
-			int tileR2 = tileR1 + BLOCK_SIZE - 1;
-			int tileC1 = bc * BLOCK_SIZE;
-			int tileC2 = tileC1 + BLOCK_SIZE - 1;
-
-			bool isFullyInside = (mRow <= tileR1 && tileR2 <= mRow + mHeight - 1) &&
-								 (mCol <= tileC1 && tileC2 <= mCol + mWidth - 1);
-
-			if (isFullyInside)
+			int currCropIdx = bucket.head;
+			while (currCropIdx != -1)
 			{
-				for (int c = 0; c < MAX_CATEGORY; ++c)
-				{
-					if (buckets[br][bc].worstGrowthState[c] != INF)
-					{
-						long long currentWorstState = buckets[br][bc].worstGrowthState[c] +
-													  (long long)growthTime[c] * buckets[br][bc].lazyWater;
-						long long requiredThreshold = (long long)growthTime[c] * L - mTime;
+				Crop& crop = cropPool[currCropIdx];
 
-						if (currentWorstState < requiredThreshold)
-						{
-							return 0;
-						}
+				bool isInside = (mRow <= crop.row && crop.row <= mRow + mHeight - 1) &&
+					(mCol <= crop.col && crop.col <= mCol + mWidth - 1);
+
+				if (isInside)
+				{
+					harvestedCropCount++;
+
+					int totalWateredSize = crop.wateredSize + bucket.wateredSize;
+					int cropSize = ((mTime - crop.plantTime) / growthTime[crop.category]) + totalWateredSize;
+
+					if (cropSize < L)
+					{
+						return 0;
 					}
 				}
-			}
-			else
-			{
-				PushDownLazyWater(br, bc);
-				
-				for (int i = 0; i < buckets[br][bc].cropCount; ++i)
-				{
-					int ar = buckets[br][bc].activeRows[i];
-					int ac = buckets[br][bc].activeCols[i];
 
-					bool isInside = (mRow <= ar && ar <= mRow + mHeight - 1) &&
-									(mCol <= ac && ac <= mCol + mWidth - 1);
-
-					if (isInside)
-					{
-						if (!IsCropHaverstable(ar, ac, mTime, L))
-						{
-							return 0;
-						}
-					}
-				}
+				currCropIdx = crop.next;
 			}
 		}
 	}
 
-	int harvestedCount = 0;
-	for (int br = startBr; br <= endBr; ++br)
+	for (int br = brStart; br <= brEnd; ++br)
 	{
-		for (int bc = startBC; bc <= endBc; ++bc)
+		for (int bc = bcStart; bc <= bcEnd; ++bc)
 		{
-			if (buckets[br][bc].cropCount == 0)
+			Bucket& bucket = farmBucket[br][bc];
+			if (bucket.activeCropCount == 0)
 			{
 				continue;
 			}
-
-			int tileR1 = br * BLOCK_SIZE;
-			int tileR2 = tileR1 + BLOCK_SIZE - 1;
-			int tileC1 = bc * BLOCK_SIZE;
-			int tileC2 = tileC1 + BLOCK_SIZE - 1;
-
-			bool isFullyInside = (mRow <= tileR1 && tileR2 <= mRow + mHeight - 1) &&
-								 (mCol <= tileC1 && tileC2 <= mCol + mWidth - 1);
-
-			if (isFullyInside)
+			
+			int currCropIdx = bucket.head;
+			while (currCropIdx != -1)
 			{
-				harvestedCount += buckets[br][bc].cropCount;
-				for (int i = 0; i < buckets[br][bc].cropCount; ++i)
-				{
-					int ar = buckets[br][bc].activeRows[i];
-					int ac = buckets[br][bc].activeCols[i];
+				Crop& crop = cropPool[currCropIdx];
+				int nextCropIdx = crop.next;
 
-					farm[ar][ac].activate = false;
-				}
-				buckets[br][bc].cropCount = 0;
-				buckets[br][bc].lazyWater = 0;
-				for (int c = 0; c < MAX_CATEGORY; ++c)
-				{
-					buckets[br][bc].worstGrowthState[c] = INF;
-				}
-			}
-			else
-			{
-				for (int i = 0; i < buckets[br][bc].cropCount; ++i)
-				{
-					int ar = buckets[br][bc].activeRows[i];
-					int ac = buckets[br][bc].activeCols[i];
+				bool isInside = (mRow <= crop.row && crop.row <= mRow + mHeight - 1) &&
+					(mCol <= crop.col && crop.col <= mCol + mWidth - 1);
 
-					bool isInside = (mRow <= ar && ar <= mRow + mHeight - 1) &&
-									(mCol <= ac && ac <= mCol + mWidth - 1);
+				if (isInside)
+				{
+					isPlanted[crop.row][crop.col] = false;
+					bucket.activeCropCount--;
 
-					if (isInside)
+					int p = crop.prev;
+					int n = crop.next;
+
+					if (p != -1)
 					{
-						RemoveCropSwapAndPop(br, bc, i);
-						harvestedCount++;
-						i--;
+						cropPool[p].next = n;
+					}
+					else
+					{
+						bucket.head = n;
+					}
+
+					if (n != -1)
+					{
+						cropPool[n].prev = p;
 					}
 				}
 
-				RecalculateBucketState(br, bc);
+				currCropIdx = nextCropIdx;
 			}
 		}
 	}
 
-	return harvestedCount;
+	return harvestedCropCount;
 }
