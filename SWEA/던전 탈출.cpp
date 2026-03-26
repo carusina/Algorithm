@@ -1,16 +1,23 @@
 #define MAP_SIZE_MAX 350
+#define INF 0x3f3f3f3f
+#define MAX_GATES 200
+#define GATE_OFFSET 1
 
 #include <queue>
 #include <cstring>
 
+// ====================
+// 구조체 선언
+// ====================
+
 struct Pos {
-	int y, x;
+	int row, col;
 	int dist;
 };
 
 struct Gate {
-	int y, x;
-	int activate;
+	int row, col;
+	bool activate;
 };
 
 struct Edge {
@@ -22,32 +29,38 @@ struct Edge {
 	}
 };
 
-constexpr int INF		      = 0x3f3f3f3f;
-constexpr int MAX_GATE    = 201;
-constexpr int GATE_OFFSET = 1;
-constexpr int dy[]		    = { -1, 1, 0, 0 };
-constexpr int dx[]        = { 0, 0, -1 ,1 };
+// ====================
+// 전역 변수
+// ====================
 
-int maxHealth;
-int gateCount;
+constexpr int dy[] = { -1, 1, 0, 0 };
+constexpr int dx[] = { 0, 0, -1 , 1 };
+
 int mapSize;
 int map[MAP_SIZE_MAX][MAP_SIZE_MAX];
 
-int currentStamp = 0;
+int maxStamina;
+
+int currentStamp;
 int visitedStamp[MAP_SIZE_MAX][MAP_SIZE_MAX];
 
-Gate gates[MAX_GATE];
-int gateDist[MAX_GATE][MAX_GATE];
+int gateCount;
+Gate gates[MAX_GATES + 1];
+int gateDist[MAX_GATES + 1][MAX_GATES + 1];
 
-Pos q[MAP_SIZE_MAX * MAP_SIZE_MAX];
+Pos q[MAP_SIZE_MAX * MAP_SIZE_MAX + 1];
 
 // ====================
 // API Helper
 // ====================
 
-inline bool IsValid(int y, int x) {
-	return 0 <= y && y < mapSize &&
-		   0 <= x && x < mapSize;
+inline bool IsValid(int row, int col) {
+	return 0 <= row && row < mapSize &&
+		0 <= col && col < mapSize;
+}
+
+inline bool IsGate(int row, int col) {
+	return 2 <= map[row][col] && map[row][col] <= MAX_GATES;
 }
 
 void GetGateDist(int mGateID) {
@@ -59,39 +72,42 @@ void GetGateDist(int mGateID) {
 		gateDist[i][mGateID] = INF;
 	}
 
+	Gate& gate = gates[mGateID];
+
 	int head = 0;
 	int tail = 0;
-	q[tail++] = { gates[mGateID].y, gates[mGateID].x, 0 };
+
+	q[tail++] = { gate.row, gate.col, 0 };
 	gateDist[mGateID][mGateID] = 0;
-	visitedStamp[gates[mGateID].y][gates[mGateID].x] = currentStamp;
+	visitedStamp[gate.row][gate.col] = currentStamp;
 
 	while (head < tail)
 	{
 		Pos curr = q[head++];
 
-		if (2 <= map[curr.y][curr.x] && map[curr.y][curr.x] <= MAX_GATE)
+		if (IsGate(curr.row, curr.col))
 		{
-			int currGate = map[curr.y][curr.x] - GATE_OFFSET;
+			int currGateID = map[curr.row][curr.col] - GATE_OFFSET;
 
-			if (gates[currGate].activate)
+			if (gates[currGateID].activate)
 			{
-				gateDist[mGateID][currGate] = curr.dist;
-				gateDist[currGate][mGateID] = curr.dist;
+				gateDist[mGateID][currGateID] = curr.dist;
+				gateDist[currGateID][mGateID] = curr.dist;
 			}
 		}
 
 		for (int d = 0; d < 4; ++d)
 		{
-			int ny = curr.y + dy[d];
-			int nx = curr.x + dx[d];
-			int nd = curr.dist + 1;
+			int nRow = curr.row + dy[d];
+			int nCol = curr.col + dx[d];
+			int nDist = curr.dist + 1;
 
-			if (IsValid(ny, nx) && visitedStamp[ny][nx] != currentStamp && map[ny][nx] != 1)
+			if (IsValid(nRow, nCol) && visitedStamp[nRow][nCol] != currentStamp && map[nRow][nCol] != 1)
 			{
-				if (nd <= maxHealth)
+				if (nDist <= maxStamina)
 				{
-					q[tail++] = { ny, nx, curr.dist + 1 };
-					visitedStamp[ny][nx] = currentStamp;
+					q[tail++] = { nRow, nCol, nDist };
+					visitedStamp[nRow][nCol] = currentStamp;
 				}
 			}
 		}
@@ -105,19 +121,21 @@ void GetGateDist(int mGateID) {
 void init(int N, int mMaxStamina, int mMap[MAP_SIZE_MAX][MAP_SIZE_MAX])
 {
 	mapSize = N;
-	maxHealth = mMaxStamina;
-	gateCount = 1;
 
-	currentStamp = 0;
-	std::memset(visitedStamp, 0, sizeof(visitedStamp));
-
-	for (int i = 0; i < mapSize; ++i)
+	for (int r = 0; r < mapSize; ++r)
 	{
-		for (int j = 0; j < mapSize; ++j)
+		for (int c = 0; c < mapSize; ++c)
 		{
-			map[i][j] = mMap[i][j];
+			map[r][c] = mMap[r][c];
 		}
 	}
+
+	maxStamina = mMaxStamina;
+
+	currentStamp = 0;
+	std::memset(visitedStamp, currentStamp, sizeof(visitedStamp));
+
+	gateCount = 1;
 
 	return;
 }
@@ -134,18 +152,17 @@ void addGate(int mGateID, int mRow, int mCol)
 
 void removeGate(int mGateID)
 {
-	int gateY = gates[mGateID].y;
-	int gateX = gates[mGateID].x;
+	Gate& gate = gates[mGateID];
 
-	map[gateY][gateX] = 0;
-	gates[mGateID].activate = false;
+	map[gate.row][gate.col] = 0;
+	gate.activate = false;
 
 	return;
 }
 
 int getMinTime(int mStartGateID, int mEndGateID)
 {
-	int dist[MAX_GATE];
+	int dist[MAX_GATES + 1];
 	for (int i = 1; i < gateCount; ++i)
 	{
 		dist[i] = INF;
@@ -167,23 +184,25 @@ int getMinTime(int mStartGateID, int mEndGateID)
 
 		if (curr.to == mEndGateID)
 		{
-			break;
+			return curr.dist;
 		}
 
-		for (int gate = 1; gate < gateCount; ++gate)
+		for (int gateID = 1; gateID < gateCount; ++gateID)
 		{
-			if (gates[gate].activate && gateDist[curr.to][gate] != INF)
-			{
-				int nextDist = curr.dist + gateDist[curr.to][gate];
+			Gate& gate = gates[gateID];
 
-				if (nextDist < dist[gate])
+			if (gate.activate && gateDist[curr.to][gateID] != INF)
+			{
+				int nextDist = curr.dist + gateDist[curr.to][gateID];
+
+				if (nextDist < dist[gateID])
 				{
-					pq.push({ gate, nextDist });
-					dist[gate] = nextDist;
+					pq.push({ gateID, nextDist });
+					dist[gateID] = nextDist;
 				}
 			}
 		}
 	}
 
-	return dist[mEndGateID] == INF ? -1 : dist[mEndGateID];
+	return -1;
 }
