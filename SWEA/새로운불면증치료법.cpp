@@ -1,3 +1,5 @@
+// https://swexpertacademy.com/main/talk/solvingClub/problemView.do?contestProbId=AV18_yw6I9MCFAZN&solveclubId=AZwrPjFqFyDHBIT3&problemBoxTitle=1%EC%A3%BC%EC%B0%A8&problemBoxCnt=6&probBoxId=AZwrPjFqFyHHBIT3
+
 #include <iostream>
 
 #define TOTAL_DIGITS 10
